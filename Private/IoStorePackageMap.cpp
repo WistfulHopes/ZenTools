@@ -1,19 +1,41 @@
 ﻿// Copyright Nikita Zolotukhin. All Rights Reserved.
 
 #include "IoStorePackageMap.h"
+
+#include "ZenTools.h"
 #include "Serialization/LargeMemoryReader.h"
 #include "Serialization/MemoryReader.h"
-#include "IO/IoContainerHeader.h"
+#include "Misc/KeyChainUtilities.h"
+#include "UObject/NameBatchSerialization.h"
 
 void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>& Reader)
 {
+	bool bReadScriptObjects = true;
 	// If this is a global container, read the Script Objects from it
-	TIoStatusOr<FIoBuffer> ScriptObjectsBuffer = Reader->Read(CreateIoChunkId(0, 0, EIoChunkType::ScriptObjects), FIoReadOptions());
-	if (ScriptObjectsBuffer.IsOk())
+	TIoStatusOr<FIoBuffer> NamesIoBuffer = Reader->Read(CreateIoChunkId(0, 0, EIoChunkType::LoaderGlobalNames), FIoReadOptions());
+	if (!NamesIoBuffer.IsOk())
 	{
-		ReadScriptObjects( ScriptObjectsBuffer.ValueOrDie() );
+		UE_LOG(LogIoStoreTools, Warning, TEXT("IoStore failed reading names chunk from global container"));
+		bReadScriptObjects = false;
+	}
+	
+	TIoStatusOr<FIoBuffer> NameHashesIoBuffer = Reader->Read(CreateIoChunkId(0, 0, EIoChunkType::LoaderGlobalNameHashes), FIoReadOptions());
+	if (!NameHashesIoBuffer.IsOk())
+	{
+		UE_LOG(LogIoStoreTools, Warning, TEXT("IoStore failed reading name hashes chunk from global container"));
+		bReadScriptObjects = false;
+	}	
+
+	TIoStatusOr<FIoBuffer> InitialLoadIoBuffer = Reader->Read(CreateIoChunkId(0, 0, EIoChunkType::LoaderInitialLoadMeta), FIoReadOptions());
+	if (!InitialLoadIoBuffer.IsOk())
+	{
+		UE_LOG(LogIoStoreTools, Warning, TEXT("IoStore failed reading initial meta chunk from global container"));
+		bReadScriptObjects = false;
 	}
 
+	if (bReadScriptObjects)
+		ReadScriptObjects( InitialLoadIoBuffer.ValueOrDie(), NamesIoBuffer.ValueOrDie(), NameHashesIoBuffer.ValueOrDie() );
+	
 	TArray<FPackageId> PackageIdsInThisContainer;
 	TArray<FPackageId> OptionalPackageIdsInThisContainer;
 	
@@ -22,38 +44,22 @@ void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>&
 	if (ContainerHeaderBuffer.IsOk())
 	{
 		FMemoryReaderView Ar(MakeArrayView(ContainerHeaderBuffer.ValueOrDie().Data(), ContainerHeaderBuffer.ValueOrDie().DataSize()));
-		FIoContainerHeader ContainerHeader;
+		FContainerHeader ContainerHeader;
 		Ar << ContainerHeader;
 
-		TArrayView<FFilePackageStoreEntry> StoreEntries(reinterpret_cast<FFilePackageStoreEntry*>(ContainerHeader.StoreEntries.GetData()), ContainerHeader.PackageIds.Num());
-		TArrayView<FFilePackageStoreEntry> OptionalStoreEntries(reinterpret_cast<FFilePackageStoreEntry*>(ContainerHeader.OptionalSegmentStoreEntries.GetData()), ContainerHeader.OptionalSegmentPackageIds.Num());
+		TArrayView<FPackageStoreEntry> StoreEntries(reinterpret_cast<FPackageStoreEntry*>(ContainerHeader.StoreEntries.GetData()), ContainerHeader.PackageIds.Num());
 
 		int32 PackageIndex = 0;
-		for (FFilePackageStoreEntry& ContainerEntry : StoreEntries)
+		for (FPackageStoreEntry& ContainerEntry : StoreEntries)
 		{
 			const FPackageId& PackageId = ContainerHeader.PackageIds[PackageIndex++];
 			FPackageHeaderData& PackageHeader = PackageHeaders.FindOrAdd(PackageId);
 			
 			PackageHeader.ImportedPackages = TArrayView<FPackageId>(ContainerEntry.ImportedPackages.Data(), ContainerEntry.ImportedPackages.Num());
-			PackageHeader.ShaderMapHashes = TArrayView<FSHAHash>(ContainerEntry.ShaderMapHashes.Data(), ContainerEntry.ShaderMapHashes.Num());
 			PackageHeader.ExportCount = ContainerEntry.ExportCount;
 			PackageHeader.ExportBundleCount = ContainerEntry.ExportBundleCount;
 			
 			PackageIdsInThisContainer.Add(PackageId);
-		}
-
-		int32 OptionalPackageIndex = 0;
-		for (FFilePackageStoreEntry& ContainerEntry : OptionalStoreEntries)
-		{
-			const FPackageId& PackageId = ContainerHeader.OptionalSegmentPackageIds[OptionalPackageIndex++];
-			FPackageHeaderData& PackageHeader = PackageHeaders.FindOrAdd(PackageId);
-			
-			PackageHeader.ImportedPackages = TArrayView<FPackageId>(ContainerEntry.ImportedPackages.Data(), ContainerEntry.ImportedPackages.Num());
-			PackageHeader.ShaderMapHashes = TArrayView<FSHAHash>(ContainerEntry.ShaderMapHashes.Data(), ContainerEntry.ShaderMapHashes.Num());
-			PackageHeader.ExportCount = ContainerEntry.ExportCount;
-			PackageHeader.ExportBundleCount = ContainerEntry.ExportBundleCount;
-			
-			OptionalPackageIdsInThisContainer.Add(PackageId);
 		}
 	}
 
@@ -70,7 +76,10 @@ void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>&
 		FPackageMapExportBundleEntry* ExportBundleEntry = ReadExportBundleData( PackageId, ChunkInfo.ValueOrDie(), PackageBuffer.ValueOrDie() );
 
 		// Required segment packages can have bulk data, memory mapped bulk data and optional bulk data
-		const TArray BulkDataChunkTypes{ EIoChunkType::BulkData, EIoChunkType::MemoryMappedBulkData, EIoChunkType::OptionalBulkData };
+		TArray<EIoChunkType> BulkDataChunkTypes;
+		BulkDataChunkTypes.Add(EIoChunkType::BulkData);
+		BulkDataChunkTypes.Add(EIoChunkType::MemoryMappedBulkData);
+		BulkDataChunkTypes.Add(EIoChunkType::OptionalBulkData);
 
 		for ( const EIoChunkType BulkDataChunkType : BulkDataChunkTypes )
 		{
@@ -149,10 +158,15 @@ bool FIoStorePackageMap::FindExportBundleData(const FPackageId& PackageId, FPack
 	return false;
 }
 
-void FIoStorePackageMap::ReadScriptObjects(const FIoBuffer& ChunkBuffer)
+void FIoStorePackageMap::ReadScriptObjects(const FIoBuffer& ChunkBuffer, const FIoBuffer& NamesIoBuffer, const FIoBuffer& NamesHashesIoBuffer)
 {
 	FLargeMemoryReader ScriptObjectsArchive(ChunkBuffer.Data(), ChunkBuffer.DataSize());
-	TArray<FDisplayNameEntryId> GlobalNameMap = LoadNameBatch(ScriptObjectsArchive);
+	TArray<FNameEntryId> GlobalNameMap;
+
+	LoadNameBatch(
+			GlobalNameMap,
+			TArrayView<const uint8>(NamesIoBuffer.Data(), NamesIoBuffer.DataSize()),
+			TArrayView<const uint8>(NamesHashesIoBuffer.Data(), NamesHashesIoBuffer.DataSize()));
 
 	int32 NumScriptObjects = 0;
 	ScriptObjectsArchive << NumScriptObjects;
@@ -162,12 +176,12 @@ void FIoStorePackageMap::ReadScriptObjects(const FIoBuffer& ChunkBuffer)
 	for (int32 ScriptObjectIndex = 0; ScriptObjectIndex < NumScriptObjects; ScriptObjectIndex++)
 	{
 		const FScriptObjectEntry& ScriptObjectEntry = ScriptObjectEntries[ScriptObjectIndex];
-		FMappedName MappedName = ScriptObjectEntry.Mapped;
+		FMappedName MappedName = FMappedName::FromMinimalName(ScriptObjectEntry.ObjectName);
 		check(MappedName.IsGlobal());
 		
 		FPackageMapScriptObjectEntry& ScriptObject = ScriptObjectMap.FindOrAdd( ScriptObjectEntry.GlobalIndex );
 		ScriptObject.ScriptObjectIndex = ScriptObjectEntry.GlobalIndex;
-		ScriptObject.ObjectName = MappedName.ResolveName(GlobalNameMap);
+		ScriptObject.ObjectName = FName::CreateFromDisplayId(GlobalNameMap[MappedName.GetIndex()], MappedName.GetNumber());;
 		ScriptObject.OuterIndex = ScriptObjectEntry.OuterIndex;
 		ScriptObject.CDOClassIndex = ScriptObjectEntry.CDOClassIndex;
 	}
@@ -193,7 +207,10 @@ FPackageLocalObjectRef FIoStorePackageMap::ResolvePackageLocalRef( const FPackag
 		}
 		else if ( PackageObjectIndex.IsPackageImport() )
 		{
-			Result.Import.PackageExportKey = FPublicExportKey::FromPackageImport( PackageObjectIndex, ImportedPackages, ImportedPublicExportHashes );
+			const FPackageImportReference PackageImportRef = PackageObjectIndex.ToPackageImportRef();
+			Result.Import.PackageId = ImportedPackages[PackageImportRef.GetImportedPackageIndex()].Value();
+			Result.Import.ExportHash = ImportedPublicExportHashes[PackageImportRef.GetImportedPublicExportHashIndex()];
+			Result.Import.PackageExportIndex = PackageObjectIndex;
 			Result.Import.bIsPackageImport = true;
 		}
 		else
@@ -210,46 +227,68 @@ FPackageLocalObjectRef FIoStorePackageMap::ResolvePackageLocalRef( const FPackag
 	return Result;
 }
 
+TUniquePtr<FIoStoreReader> CreateIoStoreReader(const TCHAR* Path, const FKeyChain& KeyChain)
+{
+	FIoStoreEnvironment IoEnvironment;
+	IoEnvironment.InitializeFileEnvironment(FPaths::ChangeExtension(Path, TEXT("")));
+	TUniquePtr<FIoStoreReader> IoStoreReader(new FIoStoreReader());
+
+	TMap<FGuid, FAES::FAESKey> DecryptionKeys;
+	for (const auto& KV : KeyChain.EncryptionKeys)
+	{
+		DecryptionKeys.Add(KV.Key, KV.Value.Key);
+	}
+	FIoStatus Status = IoStoreReader->Initialize(IoEnvironment, DecryptionKeys);
+	if (Status.IsOk())
+	{
+		return IoStoreReader;
+	}
+	else
+	{
+		UE_LOG(LogIoStoreTools, Warning, TEXT("Failed creating IoStore reader '%s' [%s]"), Path, *Status.ToString())
+		return nullptr;
+	}
+}
+
 FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FPackageId& PackageId, const FIoStoreTocChunkInfo& ChunkInfo, const FIoBuffer& ChunkBuffer )
 {
 	const uint8* PackageSummaryData = ChunkBuffer.Data();
-	const FZenPackageSummary* PackageSummary = reinterpret_cast<const FZenPackageSummary*>(PackageSummaryData);
+	const FPackageSummary* PackageSummary = reinterpret_cast<const FPackageSummary*>(PackageSummaryData);
 
-	const TArrayView<const uint8> PackageHeaderDataView(PackageSummaryData + sizeof(FZenPackageSummary), PackageSummary->HeaderSize - sizeof(FZenPackageSummary));
-	FMemoryReaderView PackageHeaderDataReader(PackageHeaderDataView);
-
-	TOptional<FZenPackageVersioningInfo> VersioningInfo;
-	if (PackageSummary->bHasVersioningInfo)
+	TArray<FNameEntryId> PackageFNames;
+	if (PackageSummary->NameMapNamesSize)
 	{
-		PackageHeaderDataReader << VersioningInfo.Emplace();
+		const uint8* NameMapNamesData = PackageSummaryData + PackageSummary->NameMapNamesOffset;
+		const uint8* NameMapHashesData = PackageSummaryData + PackageSummary->NameMapHashesOffset;
+		LoadNameBatch(
+			PackageFNames,
+			TArrayView<const uint8>(NameMapNamesData, PackageSummary->NameMapNamesSize),
+			TArrayView<const uint8>(NameMapHashesData, PackageSummary->NameMapHashesSize));
 	}
-	TArray<FDisplayNameEntryId> PackageNameMap = LoadNameBatch(PackageHeaderDataReader);
 
-	const FName PackageName = PackageSummary->Name.ResolveName(PackageNameMap);
-
+	const TArrayView<const uint8> PackageHeaderDataView(PackageSummaryData + sizeof(FPackageSummary), PackageSummary->CookedHeaderSize - sizeof(FPackageSummary));
+	FMemoryReaderView PackageHeaderDataReader(PackageHeaderDataView);
+	
 	// Find package header to resolve imported package IDs
 	const FPackageHeaderData& PackageHeader = PackageHeaders.FindChecked( PackageId );
 	
 	// Construct package data
 	FPackageMapExportBundleEntry& PackageData = PackageMap.FindOrAdd( PackageId );
-	PackageData.PackageFilename = ChunkInfo.FileName;
-	PackageData.PackageName = PackageName;
+	PackageData.CookedHeaderSize = PackageSummary->CookedHeaderSize;
+	PackageData.PackageName = FName::CreateFromDisplayId(PackageFNames[PackageSummary->Name.GetIndex()], PackageSummary->Name.GetNumber());
 	PackageData.PackageFlags = PackageSummary->PackageFlags;
-	PackageData.VersioningInfo = VersioningInfo;
+	// PackageData.VersioningInfo = VersioningInfo;
 	PackageData.PackageChunkId = ChunkInfo.Id;
-
-	// get rid of standard filename prefix
-	PackageData.PackageFilename.RemoveFromStart( TEXT("../../../") );
-
+	
 	// Save name map
-	PackageData.NameMap.AddZeroed( PackageNameMap.Num() );
-	for ( int32 i = 0; i < PackageNameMap.Num(); i++ )
+	PackageData.NameMap.AddZeroed( PackageFNames.Num() );
+	for ( int32 i = 0; i < PackageFNames.Num(); i++ )
 	{
-		PackageData.NameMap[i] = PackageNameMap[ i ].ToName( NAME_NO_NUMBER_INTERNAL );
+		PackageData.NameMap[i] = FName::CreateFromDisplayId(PackageFNames[PackageSummary->Name.GetIndex()], NAME_NO_NUMBER_INTERNAL);
 	}
 
 	/** Public export hashes for each import map entry in this package. */
-	TArrayView<const uint64> ImportedPublicExportHashes = MakeArrayView<const uint64>(reinterpret_cast<const uint64*>(PackageSummaryData + PackageSummary->ImportedPublicExportHashesOffset), (PackageSummary->ImportMapOffset - PackageSummary->ImportedPublicExportHashesOffset) / sizeof(uint64));
+	TArrayView<const uint64> ImportedPublicExportHashes = MakeArrayView<const uint64>(reinterpret_cast<const uint64*>(PackageSummaryData + PackageSummary->NameMapHashesSize), (PackageSummary->ImportMapOffset - PackageSummary->NameMapHashesSize) / sizeof(uint64));
 
 	// Resolve import map now
 	const FPackageObjectIndex* ImportMap = reinterpret_cast<const FPackageObjectIndex*>(PackageSummaryData + PackageSummary->ImportMapOffset);
@@ -268,7 +307,10 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 		else if ( ImportMapEntry.IsPackageImport() )
 		{
 			PackageMapImport.bIsPackageImport = true;
-			PackageMapImport.PackageExportKey = FPublicExportKey::FromPackageImport( ImportMapEntry, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
+			const FPackageImportReference PackageImportRef = ImportMapEntry.ToPackageImportRef();
+			PackageMapImport.PackageId = PackageHeader.ImportedPackages[PackageImportRef.GetImportedPackageIndex()].Value();
+			PackageMapImport.ExportHash = ImportedPublicExportHashes[PackageImportRef.GetImportedPublicExportHashIndex()];
+			PackageMapImport.PackageExportIndex = ImportMapEntry;
 		}
 		else
 		{
@@ -285,15 +327,15 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 		const FExportMapEntry& ExportMapEntry = ExportMap[ ExportIndex ];
 		FPackageMapExportEntry& ExportData = PackageData.ExportMap[ ExportIndex ];
 
-		ExportData.ObjectName = ExportMapEntry.ObjectName.ResolveName( PackageNameMap );
+		ExportData.ObjectName = FName::CreateFromDisplayId(PackageFNames[ExportMapEntry.ObjectName.GetIndex()], ExportMapEntry.ObjectName.GetNumber());
 		ExportData.FilterFlags = ExportMapEntry.FilterFlags;
 		ExportData.ObjectFlags = ExportMapEntry.ObjectFlags;
-		ExportData.PublicExportHash = ExportMapEntry.PublicExportHash;
 
 		ExportData.OuterIndex = ResolvePackageLocalRef( ExportMapEntry.OuterIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
 		ExportData.ClassIndex = ResolvePackageLocalRef( ExportMapEntry.ClassIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
 		ExportData.SuperIndex = ResolvePackageLocalRef( ExportMapEntry.SuperIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
 		ExportData.TemplateIndex = ResolvePackageLocalRef( ExportMapEntry.TemplateIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
+		ExportData.GlobalImportIndex = ResolvePackageLocalRef( ExportMapEntry.GlobalImportIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
 
 		ExportData.SerialDataSize = ExportMapEntry.CookedSerialSize;
 		ExportData.SerialDataOffset = INDEX_NONE;
@@ -301,8 +343,8 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 
 	// Read export bundles
 	const FExportBundleHeader* ExportBundleHeaders = reinterpret_cast<const FExportBundleHeader*>(PackageSummaryData + PackageSummary->GraphDataOffset);
-	const FExportBundleEntry* ExportBundleEntries = reinterpret_cast<const FExportBundleEntry*>(PackageSummaryData + PackageSummary->ExportBundleEntriesOffset);
-	uint64 CurrentExportOffset = PackageSummary->HeaderSize;
+	const FExportBundleEntry* ExportBundleEntries = reinterpret_cast<const FExportBundleEntry*>(PackageSummaryData + PackageSummary->ExportBundlesOffset);
+	uint64 CurrentExportOffset = PackageSummary->CookedHeaderSize;
 	
 	for ( int32 ExportBundleIndex = 0; ExportBundleIndex < PackageHeader.ExportBundleCount; ExportBundleIndex++ )
 	{
@@ -330,7 +372,7 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	// Read arcs, they are needed to create a list of preload dependencies for this package
 	const uint64 ExportBundleHeadersSize = sizeof(FExportBundleHeader) * PackageHeader.ExportBundleCount;
 	const uint64 ArcsDataOffset = PackageSummary->GraphDataOffset + ExportBundleHeadersSize;
-	const uint64 ArcsDataSize = PackageSummary->HeaderSize - ArcsDataOffset;
+	const uint64 ArcsDataSize = PackageSummary->CookedHeaderSize - ArcsDataOffset;
 
 	FMemoryReaderView ArcsAr(MakeArrayView<const uint8>(PackageSummaryData + ArcsDataOffset, ArcsDataSize));
 

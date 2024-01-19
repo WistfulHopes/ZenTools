@@ -9,7 +9,6 @@ public class ZenToolsTarget : TargetRules
 	{
 		Type = TargetType.Program;
 		LinkType = TargetLinkType.Monolithic;
-		IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
 		LaunchModuleName = "ZenTools";
 
 		bBuildDeveloperTools = false;

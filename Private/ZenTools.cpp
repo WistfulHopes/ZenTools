@@ -12,8 +12,6 @@ DEFINE_LOG_CATEGORY( LogIoStoreTools );
 
 INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 {
-	FTaskTagScope Scope(ETaskTag::EGameThread);
-
 	// start up the main loop
 	GEngineLoop.PreInit(ArgC, ArgV);
 
@@ -87,7 +85,7 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 	TArray<FString> ContainerTableOfContentsFiles;
 	IFileManager::Get().FindFiles( ContainerTableOfContentsFiles, *ContainerDirPath, TEXT(".utoc") );
 
-	if ( ContainerTableOfContentsFiles.IsEmpty() )
+	if ( ContainerTableOfContentsFiles.Num() == 0 )
 	{
 		UE_LOG( LogIoStoreTools, Display, TEXT("Didn't find any container files in folder '%s'"), *ContainerDirPath );
 		return false;
@@ -98,8 +96,11 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 	{
 		const TSharedPtr<FIoStoreReader> IoStoreReader = MakeShared<FIoStoreReader>();
 		const FString FullFilePath = FPaths::Combine( ContainerDirPath, ContainerFilename );
+
+		FIoStoreEnvironment Environment = FIoStoreEnvironment();
+		Environment.InitializeFileEnvironment(*FPaths::ChangeExtension( FullFilePath, TEXT("") ), 0);
 		
-		const FIoStatus OpenStatus = IoStoreReader->Initialize(  *FPaths::ChangeExtension( FullFilePath, TEXT("") ), EncryptionKeys );
+		const FIoStatus OpenStatus = IoStoreReader->Initialize(  Environment, EncryptionKeys );
 		if ( !OpenStatus.IsOk() )
 		{
 			UE_LOG( LogIoStoreTools, Error, TEXT("Failed to open Container file '%s': %s"), *FullFilePath, *OpenStatus.ToString() );
@@ -125,7 +126,6 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 	for ( const TSharedPtr<FIoStoreReader>& Reader : ContainerReaders )
 	{
 		PackageWriter->WritePackagesFromContainer( Reader );
-		PackageWriter->WriteGlobalScriptObjects( Reader );
 	}
 	
 	UE_LOG( LogIoStoreTools, Display, TEXT("Done writing %d packages."), PackageWriter->GetTotalNumPackagesWritten() );

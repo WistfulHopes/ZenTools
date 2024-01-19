@@ -18,7 +18,6 @@ struct FPackageContainerMetadata
 struct FPackageHeaderData
 {
 	TArray<FPackageId> ImportedPackages;
-	TArray<FSHAHash> ShaderMapHashes;
 	int32 ExportCount{0};
 	int32 ExportBundleCount{0};
 };
@@ -41,8 +40,10 @@ struct FPackageMapImportEntry
 {
 	/** Index to use in the global lookup map to find a script object */
 	FPackageObjectIndex ScriptImportIndex{};
+	FPackageObjectIndex PackageExportIndex{};
 	/** PackageId + hash of the export name to find a package inside of the package map and also an exported object inside of it's exports */
-	FPublicExportKey PackageExportKey{};
+	uint64 PackageId = 0;
+	uint64 ExportHash = 0;
 	/** True if this is a script import */
 	bool bIsScriptImport{false};
 	/** True if this is a Null import, in that case nothing else will be set */
@@ -76,8 +77,7 @@ struct FPackageMapExportEntry
 	FPackageLocalObjectRef ClassIndex;
 	FPackageLocalObjectRef SuperIndex;
 	FPackageLocalObjectRef TemplateIndex;
-	/** If this is a public export, a hash of it that can be used to identify the export inside of the package */
-	uint64 PublicExportHash{0};
+	FPackageLocalObjectRef GlobalImportIndex;
 	/** Flags set on the object */
 	EObjectFlags ObjectFlags{RF_NoFlags};
 	/** Flags to filter the export out on the client or server */
@@ -112,7 +112,7 @@ struct FPackageMapExportBundleEntry
 {
 	FName PackageName;
 	/** If present, versioning info staged inside of the export bundle. Usually absent if -unversioned is provided */
-	TOptional<FZenPackageVersioningInfo> VersioningInfo;
+	// TOptional<FZenPackageVersioningInfo> VersioningInfo;
 	/** Flags of the UPackage object this describes */
 	uint32 PackageFlags{PKG_None};
 	/** Package name map */
@@ -127,12 +127,11 @@ struct FPackageMapExportBundleEntry
 	TArray<FPackageMapInternalDependencyArc> InternalArcs;
 	/** Dependencies from the package bundles inside of this package to external packages */
 	TArray<FPackageMapExternalDependencyArc> ExternalArcs;
-	/** Filename of the package, retrieved from the chunk filename */
-	FString PackageFilename;
 	/** ID of the chunk in which exports of this package are located */
 	FIoChunkId PackageChunkId;
 	/** ID of the bulk data chunks for this package */
 	TArray<FIoChunkId> BulkDataChunkIds;
+	uint32 CookedHeaderSize = 0;
 };
 
 /** Package map is a central storage mapping package IDs (and overall any FPackageObjectIndex objects) to their names and locations */
@@ -159,7 +158,7 @@ public:
 
 	FORCEINLINE int32 GetTotalPackageCount() const { return PackageMap.Num(); }
 private:
-	void ReadScriptObjects( const FIoBuffer& ChunkBuffer );
+	void ReadScriptObjects( const FIoBuffer& ChunkBuffer, const FIoBuffer& NamesIoBuffer, const FIoBuffer& NamesHashesIoBuffer );
 	FPackageMapExportBundleEntry* ReadExportBundleData( const FPackageId& PackageId, const FIoStoreTocChunkInfo& ChunkInfo, const FIoBuffer& ChunkBuffer );
 	
 	static FPackageLocalObjectRef ResolvePackageLocalRef( const FPackageObjectIndex& PackageObjectIndex, const TArrayView<const FPackageId>& ImportedPackages, const TArrayView<const uint64>& ImportedPublicExportHashes );
