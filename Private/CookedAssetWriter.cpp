@@ -175,7 +175,7 @@ void FCookedAssetWriter::WriteSinglePackage( FPackageId PackageId, bool bIsOptio
 		{
 			ExtensionString.InsertAt( 0, TEXT(".o") );
 		}
-		const FString ExportsFilename = FPaths::ChangeExtension( SerializationContext.PackageHeaderFilename, ExtensionString );
+		const FString ExportsFilename = FPaths::SetExtension( SerializationContext.PackageHeaderFilename, ExtensionString );
 
 		const TUniquePtr<FArchive> ExportsArchive( IFileManager::Get().CreateFileWriter( *ExportsFilename, FILEWRITE_EvenIfReadOnly ) );
 		checkf( ExportsArchive.IsValid(), TEXT("Failed to load exports file '%s'"), *ExportsFilename );
@@ -194,7 +194,7 @@ void FCookedAssetWriter::WriteSinglePackage( FPackageId PackageId, bool bIsOptio
 		{
 			ExtensionString.InsertAt( 0, TEXT(".o") );
 		}
-		const FString HeaderFilename = FPaths::ChangeExtension( SerializationContext.PackageHeaderFilename, ExtensionString );
+		const FString HeaderFilename = FPaths::SetExtension( SerializationContext.PackageHeaderFilename, ExtensionString );
 		
 		FString RelativeFilename = FPaths::SetExtension( PackageFilename, ExtensionString );
 		ChunkIdToSavedFileMap.Add( SerializationContext.BundleData->PackageChunkId, RelativeFilename );
@@ -301,29 +301,17 @@ FPackageIndex FCookedAssetWriter::CreateScriptObjectImport(const FPackageObjectI
 	return ResultObjectIndex;
 }
 
-FPackageIndex FCookedAssetWriter::CreateExternalPackageObjectReference(const uint64 PackageId, const FPackageObjectIndex& PackageExportIndex, FAssetSerializationContext& Context) const
+FPackageIndex FCookedAssetWriter::CreateExternalPackageObjectReference(const FPackageObjectIndex& PackageExportIndex, FAssetSerializationContext& Context) const
 {
-	// Make sure to check that this is not our own export first
-	if ( FPackageId(PackageId) != Context.PackageId )
-	{
-		// Resolve exported package bundle first
-		FPackageMapExportBundleEntry ImportedPackageBundle;
-		check( PackageMap->FindExportBundleData( FPackageId(PackageId), ImportedPackageBundle ) );
-		
-		// Find the index of the export with the specified hash
-		const int32 ExportIndex = PackageExportIndex.ToExport();
-		check( ExportIndex != INDEX_NONE );
+	FPackageMapExportBundleEntry ImportedPackageBundle;
+	check( PackageMap->FindExportBundleData( PackageExportIndex, ImportedPackageBundle ) );
 
-		// Call the internal function that will recursively populate exports
-		return CreatePackageExportReference( &ImportedPackageBundle, ExportIndex, Context );
-	}
-
-	// This is somehow an import being resolved into our own package, so this is actually an export reference
-	const int32 ExportIndex = PackageExportIndex.ToExport();
-
-	// These should never point to the root of the package, so the simple hash lookup should be good
+	// Find the index of the export with the specified hash
+	const int32 ExportIndex = PackageMap->FindExportIndex(PackageExportIndex);
 	check( ExportIndex != INDEX_NONE );
-	return FPackageIndex::FromExport( ExportIndex );
+
+	// Call the internal function that will recursively populate exports
+	return CreatePackageExportReference( &ImportedPackageBundle, ExportIndex, Context );
 }
 
 FPackageIndex FCookedAssetWriter::CreateExternalPackageReference(const FPackageId& PackageId, FAssetSerializationContext& Context) const
@@ -357,7 +345,7 @@ FPackageIndex FCookedAssetWriter::ResolvePackageLocalRef( const FPackageMapExpor
 		// Reference to the object inside of the another package
 		if ( ImportedObject.bIsPackageImport )
 		{
-			return CreateExternalPackageObjectReference( ImportedObject.PackageId, ImportedObject.PackageExportIndex, Context );
+			return CreateExternalPackageObjectReference( ImportedObject.GlobalImportIndex, Context );
 		}
 	}
 	// Reference to an export inside of the current package
@@ -504,25 +492,16 @@ FExportBundleEntry FCookedAssetWriter::BuildPreloadDependenciesFromExportBundle(
 		const FExportBundleEntry& FirstExportInBundle = ExportBundle[ 0 ];
     	FExportPreloadDependencyList& FirstPreloadDependency = Context.PreloadDependencies[ FirstExportInBundle.LocalExportIndex ];
     
-    	// Add internal dependencies to the first export in the bundle
-    	for ( const FPackageMapInternalDependencyArc& InternalDependency : Context.BundleData->InternalArcs )
-    	{
-    		if ( InternalDependency.ToExportBundleIndex == ExportBundleIndex )
-    		{
-    			const FExportBundleEntry LastExportInBundle = BuildPreloadDependenciesFromExportBundle( InternalDependency.FromExportBundleIndex, Context );
-    			const FPackageIndex ExportIndex = FPackageIndex::FromExport( LastExportInBundle.LocalExportIndex );
-    			
-    			FirstPreloadDependency.AddDependency( FirstExportInBundle.CommandType, ExportIndex, LastExportInBundle.CommandType );
-    		}
-    	}
-    	
     	// Add external dependencies to the first export in the bundle
     	for ( const FPackageMapExternalDependencyArc& ExternalDependency : Context.BundleData->ExternalArcs )
     	{
-    		if ( ExternalDependency.ToExportBundleIndex == ExportBundleIndex )
+    		for (const FArc& ExternalArc : ExternalDependency.Arcs )
     		{
-    			const FPackageIndex ImportIndex = FPackageIndex::FromImport( ExternalDependency.FromImportIndex );
-    			FirstPreloadDependency.AddDependency( FirstExportInBundle.CommandType, ImportIndex, ExternalDependency.FromCommandType );
+    			if ( ExternalArc.ToNodeIndex == ExportBundleIndex )
+    			{
+    				const FPackageIndex ImportIndex = FPackageIndex::FromImport( ExternalArc.FromNodeIndex );
+    				FirstPreloadDependency.AddDependency( FirstExportInBundle.CommandType, ImportIndex, FirstExportInBundle.CommandType );
+    			}
     		}
     	}
     
@@ -686,7 +665,7 @@ void FCookedAssetWriter::ProcessPackageSummaryAndNamesAndExportsAndImports( FAss
 
 	// Serialize general data
 	Summary.Tag = PACKAGE_FILE_TAG;
-	//Summary.SetPackageFlags( Context.BundleData->PackageFlags );
+	Summary.PackageFlags = Context.BundleData->PackageFlags;
 	reinterpret_cast<FUglyPackageSummaryPackageFlagsAccessWorkaround*>( &Summary )->PackageFlags = Context.BundleData->PackageFlags;
 
 	Summary.SetFileVersions(GPackageFileUE4Version, GPackageFileLicenseeUE4Version);
@@ -720,7 +699,7 @@ void FCookedAssetWriter::ProcessPackageSummaryAndNamesAndExportsAndImports( FAss
 		// Otherwise attempt to resolve package import
 		else if ( ImportMapEntry.bIsPackageImport )
 		{
-			const FPackageIndex TopmostImportIndex = CreateExternalPackageObjectReference( ImportMapEntry.PackageId, ImportMapEntry.PackageExportIndex, Context );
+			const FPackageIndex TopmostImportIndex = CreateExternalPackageObjectReference( ImportMapEntry.GlobalImportIndex, Context );
 			OriginalImportOrder.Add( TopmostImportIndex.ToImport() );
 		}
 		// Otherwise it is a null import

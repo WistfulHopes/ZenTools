@@ -15,21 +15,18 @@ void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>&
 	TIoStatusOr<FIoBuffer> NamesIoBuffer = Reader->Read(CreateIoChunkId(0, 0, EIoChunkType::LoaderGlobalNames), FIoReadOptions());
 	if (!NamesIoBuffer.IsOk())
 	{
-		UE_LOG(LogIoStoreTools, Warning, TEXT("IoStore failed reading names chunk from global container"));
 		bReadScriptObjects = false;
 	}
 	
 	TIoStatusOr<FIoBuffer> NameHashesIoBuffer = Reader->Read(CreateIoChunkId(0, 0, EIoChunkType::LoaderGlobalNameHashes), FIoReadOptions());
 	if (!NameHashesIoBuffer.IsOk())
 	{
-		UE_LOG(LogIoStoreTools, Warning, TEXT("IoStore failed reading name hashes chunk from global container"));
 		bReadScriptObjects = false;
 	}	
 
 	TIoStatusOr<FIoBuffer> InitialLoadIoBuffer = Reader->Read(CreateIoChunkId(0, 0, EIoChunkType::LoaderInitialLoadMeta), FIoReadOptions());
 	if (!InitialLoadIoBuffer.IsOk())
 	{
-		UE_LOG(LogIoStoreTools, Warning, TEXT("IoStore failed reading initial meta chunk from global container"));
 		bReadScriptObjects = false;
 	}
 
@@ -150,12 +147,37 @@ bool FIoStorePackageMap::FindScriptObject(const FPackageObjectIndex& Index, FPac
 
 bool FIoStorePackageMap::FindExportBundleData(const FPackageId& PackageId, FPackageMapExportBundleEntry& OutExportBundleEntry) const
 {
-	if ( const FPackageMapExportBundleEntry* Bundle = PackageMap.Find( PackageId ) )
+	for (const auto& PackageInfo : PackageInfos)
 	{
-		OutExportBundleEntry = *Bundle;
-		return true;
+		if (PackageId == PackageInfo.PackageId)
+		{
+			OutExportBundleEntry = PackageInfo;
+			return true;
+		}
 	}
 	return false;
+}
+
+bool FIoStorePackageMap::FindExportBundleData(const FPackageObjectIndex& Index,
+	FPackageMapExportBundleEntry& OutExportBundleEntry) const
+{
+	for (const auto& PackageInfo : PackageInfos)
+	{
+		for (const auto& Export : PackageInfo.ExportMap)
+		{
+			if (ResolvePackageLocalRef(Index) == Export.GlobalImportIndex)
+			{
+				OutExportBundleEntry = PackageInfo;
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+int32 FIoStorePackageMap::FindExportIndex(const FPackageObjectIndex& Index)
+{
+	return ExportIndices[Index];
 }
 
 void FIoStorePackageMap::ReadScriptObjects(const FIoBuffer& ChunkBuffer, const FIoBuffer& NamesIoBuffer, const FIoBuffer& NamesHashesIoBuffer)
@@ -187,7 +209,7 @@ void FIoStorePackageMap::ReadScriptObjects(const FIoBuffer& ChunkBuffer, const F
 	}
 }
 
-FPackageLocalObjectRef FIoStorePackageMap::ResolvePackageLocalRef( const FPackageObjectIndex& PackageObjectIndex, const TArrayView<const FPackageId>& ImportedPackages, const TArrayView<const uint64>& ImportedPublicExportHashes )
+FPackageLocalObjectRef FIoStorePackageMap::ResolvePackageLocalRef( const FPackageObjectIndex& PackageObjectIndex )
 {
 	FPackageLocalObjectRef Result{};
 
@@ -207,10 +229,7 @@ FPackageLocalObjectRef FIoStorePackageMap::ResolvePackageLocalRef( const FPackag
 		}
 		else if ( PackageObjectIndex.IsPackageImport() )
 		{
-			const FPackageImportReference PackageImportRef = PackageObjectIndex.ToPackageImportRef();
-			Result.Import.PackageId = ImportedPackages[PackageImportRef.GetImportedPackageIndex()].Value();
-			Result.Import.ExportHash = ImportedPublicExportHashes[PackageImportRef.GetImportedPublicExportHashIndex()];
-			Result.Import.PackageExportIndex = PackageObjectIndex;
+			Result.Import.GlobalImportIndex = PackageObjectIndex;
 			Result.Import.bIsPackageImport = true;
 		}
 		else
@@ -238,7 +257,7 @@ TUniquePtr<FIoStoreReader> CreateIoStoreReader(const TCHAR* Path, const FKeyChai
 	{
 		DecryptionKeys.Add(KV.Key, KV.Value.Key);
 	}
-	FIoStatus Status = IoStoreReader->Initialize(IoEnvironment, DecryptionKeys);
+	const FIoStatus Status = IoStoreReader->Initialize(IoEnvironment, DecryptionKeys);
 	if (Status.IsOk())
 	{
 		return IoStoreReader;
@@ -273,7 +292,8 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	const FPackageHeaderData& PackageHeader = PackageHeaders.FindChecked( PackageId );
 	
 	// Construct package data
-	FPackageMapExportBundleEntry& PackageData = PackageMap.FindOrAdd( PackageId );
+	FPackageMapExportBundleEntry& PackageData = PackageInfos.AddDefaulted_GetRef();
+	PackageData.PackageId = PackageId;
 	PackageData.CookedHeaderSize = PackageSummary->CookedHeaderSize;
 	PackageData.PackageName = FName::CreateFromDisplayId(PackageFNames[PackageSummary->Name.GetIndex()], PackageSummary->Name.GetNumber());
 	PackageData.PackageFlags = PackageSummary->PackageFlags;
@@ -286,9 +306,6 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	{
 		PackageData.NameMap[i] = FName::CreateFromDisplayId(PackageFNames[PackageSummary->Name.GetIndex()], NAME_NO_NUMBER_INTERNAL);
 	}
-
-	/** Public export hashes for each import map entry in this package. */
-	TArrayView<const uint64> ImportedPublicExportHashes = MakeArrayView<const uint64>(reinterpret_cast<const uint64*>(PackageSummaryData + PackageSummary->NameMapHashesSize), (PackageSummary->ImportMapOffset - PackageSummary->NameMapHashesSize) / sizeof(uint64));
 
 	// Resolve import map now
 	const FPackageObjectIndex* ImportMap = reinterpret_cast<const FPackageObjectIndex*>(PackageSummaryData + PackageSummary->ImportMapOffset);
@@ -307,10 +324,7 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 		else if ( ImportMapEntry.IsPackageImport() )
 		{
 			PackageMapImport.bIsPackageImport = true;
-			const FPackageImportReference PackageImportRef = ImportMapEntry.ToPackageImportRef();
-			PackageMapImport.PackageId = PackageHeader.ImportedPackages[PackageImportRef.GetImportedPackageIndex()].Value();
-			PackageMapImport.ExportHash = ImportedPublicExportHashes[PackageImportRef.GetImportedPublicExportHashIndex()];
-			PackageMapImport.PackageExportIndex = ImportMapEntry;
+			PackageMapImport.GlobalImportIndex = ImportMapEntry;
 		}
 		else
 		{
@@ -331,19 +345,19 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 		ExportData.FilterFlags = ExportMapEntry.FilterFlags;
 		ExportData.ObjectFlags = ExportMapEntry.ObjectFlags;
 
-		ExportData.OuterIndex = ResolvePackageLocalRef( ExportMapEntry.OuterIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
-		ExportData.ClassIndex = ResolvePackageLocalRef( ExportMapEntry.ClassIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
-		ExportData.SuperIndex = ResolvePackageLocalRef( ExportMapEntry.SuperIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
-		ExportData.TemplateIndex = ResolvePackageLocalRef( ExportMapEntry.TemplateIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
-		ExportData.GlobalImportIndex = ResolvePackageLocalRef( ExportMapEntry.GlobalImportIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
+		ExportData.OuterIndex = ResolvePackageLocalRef( ExportMapEntry.OuterIndex );
+		ExportData.ClassIndex = ResolvePackageLocalRef( ExportMapEntry.ClassIndex );
+		ExportData.SuperIndex = ResolvePackageLocalRef( ExportMapEntry.SuperIndex );
+		ExportData.TemplateIndex = ResolvePackageLocalRef( ExportMapEntry.TemplateIndex );
+		ExportData.GlobalImportIndex = ResolvePackageLocalRef( ExportMapEntry.GlobalImportIndex );
 
 		ExportData.SerialDataSize = ExportMapEntry.CookedSerialSize;
 		ExportData.SerialDataOffset = INDEX_NONE;
 	}
 
 	// Read export bundles
-	const FExportBundleHeader* ExportBundleHeaders = reinterpret_cast<const FExportBundleHeader*>(PackageSummaryData + PackageSummary->GraphDataOffset);
-	const FExportBundleEntry* ExportBundleEntries = reinterpret_cast<const FExportBundleEntry*>(PackageSummaryData + PackageSummary->ExportBundlesOffset);
+	const FExportBundleHeader* ExportBundleHeaders = reinterpret_cast<const FExportBundleHeader*>(PackageSummaryData + PackageSummary->ExportBundlesOffset);
+	const FExportBundleEntry* ExportBundleEntries = reinterpret_cast<const FExportBundleEntry*>(ExportBundleHeaders + PackageHeader.ExportBundleCount);
 	uint64 CurrentExportOffset = PackageSummary->CookedHeaderSize;
 	
 	for ( int32 ExportBundleIndex = 0; ExportBundleIndex < PackageHeader.ExportBundleCount; ExportBundleIndex++ )
@@ -368,23 +382,78 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 			BundleEntry++;
 		}
 	}
+	
+	TMap<FPackageId, FName> PackageNameMap;
+	for (auto& PackageInfo : PackageInfos)
+	{
+		if (PackageInfo.PackageName != NAME_None)
+		{
+			PackageNameMap.Add(PackageInfo.PackageId, PackageInfo.PackageName);
+		}
+		if (PackageInfo.PackageId.IsValid())
+		{
+			for (int i = 0; i < PackageInfo.ExportMap.Num(); i++)
+			{
+				auto& Export = PackageInfo.ExportMap[i];
+				if (!Export.GlobalImportIndex.bIsNull)
+				{
+					this->ExportIndices.Add(ExportMap[i].GlobalImportIndex, i);
+				}
+			}
+		}
+	}
+	
+	for (int i = 0; i < PackageNameMap.Num(); i++)
+	{
+		auto& PackageInfo = PackageInfos[i];
+		if (!PackageInfo.PackageId.IsValid()) return nullptr;
 
+		for (int j = 0; j < PackageInfo.ExportMap.Num(); j++)
+		{
+			auto& Export = PackageInfo.ExportMap[j];
+
+			if (Export.FullName.IsNone())
+			{
+				TArray<FPackageMapExportEntry*> ExportStack;
+
+				auto* Current = &Export;
+				TStringBuilder<2048> FullNameBuilder;
+				TCHAR NameBuffer[FName::StringBufferSize];
+				for (;;)
+				{
+					if (!Current->FullName.IsNone())
+					{
+						Current->FullName.ToString(NameBuffer);
+						FullNameBuilder.Append(NameBuffer);
+						break;
+					}
+					ExportStack.Push(Current);
+					if (Current->OuterIndex.bIsNull)
+					{
+						PackageInfo.PackageName.ToString(NameBuffer);
+						FullNameBuilder.Append(NameBuffer);
+						break;
+					}
+					Current = &PackageInfo.ExportMap[Current->OuterIndex.ExportIndex];
+				}
+				while (ExportStack.Num() > 0)
+				{
+					Current = ExportStack.Pop(false);
+					FullNameBuilder.Append(TEXT("/"));
+					Current->ObjectName.ToString(NameBuffer);
+					FullNameBuilder.Append(NameBuffer);
+					Current->FullName = FName(FullNameBuilder);
+				}
+			}
+		}
+	}
+	
 	// Read arcs, they are needed to create a list of preload dependencies for this package
-	const uint64 ExportBundleHeadersSize = sizeof(FExportBundleHeader) * PackageHeader.ExportBundleCount;
-	const uint64 ArcsDataOffset = PackageSummary->GraphDataOffset + ExportBundleHeadersSize;
+	//const uint64 ExportBundleHeadersSize = sizeof(FExportBundleHeader) * PackageHeader.ExportBundleCount;
+	const uint64 ArcsDataOffset = PackageSummary->GraphDataOffset;
 	const uint64 ArcsDataSize = PackageSummary->CookedHeaderSize - ArcsDataOffset;
 
 	FMemoryReaderView ArcsAr(MakeArrayView<const uint8>(PackageSummaryData + ArcsDataOffset, ArcsDataSize));
-
-	int32 InternalArcsCount = 0;
-	ArcsAr << InternalArcsCount;
-
-	for ( int32 Idx = 0; Idx < InternalArcsCount; Idx++ )
-	{
-		FPackageMapInternalDependencyArc& InternalArc = PackageData.InternalArcs.AddDefaulted_GetRef();
-		ArcsAr << InternalArc.FromExportBundleIndex;
-		ArcsAr << InternalArc.ToExportBundleIndex;
-	}
 
 	for ( int32 ImportPackageIndex = 0; ImportPackageIndex < PackageHeader.ImportedPackages.Num(); ImportPackageIndex++ )
 	{
@@ -394,11 +463,14 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 		for ( int32 Idx = 0; Idx < ExternalArcsCount; Idx++ )
 		{
 			FPackageMapExternalDependencyArc& ExternalArc = PackageData.ExternalArcs.AddDefaulted_GetRef();
-			ArcsAr << ExternalArc.FromImportIndex;
-			uint8 FromCommandType = 0;
-			ArcsAr << FromCommandType;
-			ExternalArc.FromCommandType = static_cast<FExportBundleEntry::EExportCommandType>(FromCommandType);
-			ArcsAr << ExternalArc.ToExportBundleIndex;
+			ArcsAr << ExternalArc.ImportedPackageId;
+			ArcsAr << ExternalArc.ExternalArcCount;
+			for (int32 Idx2 = 0; Idx2 < ExternalArc.ExternalArcCount; Idx2++)
+			{
+				FArc NewArc;
+				ArcsAr << NewArc;
+				ExternalArc.Arcs.Add(NewArc);
+			}
 		}
 	}
 	return &PackageData;

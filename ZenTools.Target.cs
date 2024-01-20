@@ -10,11 +10,14 @@ public class ZenToolsTarget : TargetRules
 		Type = TargetType.Program;
 		LinkType = TargetLinkType.Monolithic;
 		LaunchModuleName = "ZenTools";
+		
+		ExtraModuleNames.Add("OodleDataCompressionFormat");
+		EnablePlugins.Add("OodleData");
 
 		bBuildDeveloperTools = false;
 		bUseMallocProfiler = false;
-		bCompileWithPluginSupport = false;
-		bIncludePluginsForTargetPlatforms = false;
+		bCompileWithPluginSupport = true;
+		bIncludePluginsForTargetPlatforms = true;
 
 		// Editor-only data, however, is needed
 		bBuildWithEditorOnlyData = true;

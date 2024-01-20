@@ -40,17 +40,22 @@ struct FPackageMapImportEntry
 {
 	/** Index to use in the global lookup map to find a script object */
 	FPackageObjectIndex ScriptImportIndex{};
-	FPackageObjectIndex PackageExportIndex{};
-	/** PackageId + hash of the export name to find a package inside of the package map and also an exported object inside of it's exports */
-	uint64 PackageId = 0;
-	uint64 ExportHash = 0;
+	FPackageObjectIndex GlobalImportIndex{};
 	/** True if this is a script import */
 	bool bIsScriptImport{false};
 	/** True if this is a Null import, in that case nothing else will be set */
 	bool bIsNullImport{false};
 	/** True if this is a package import */
 	bool bIsPackageImport{false};
+	bool operator==(const FPackageMapImportEntry& other) const;
 };
+
+inline bool FPackageMapImportEntry::operator==(const FPackageMapImportEntry& other) const
+{
+	return ScriptImportIndex == other.ScriptImportIndex && GlobalImportIndex == other.GlobalImportIndex
+		&& bIsScriptImport == other.bIsScriptImport && bIsNullImport == other.bIsNullImport
+		&& bIsPackageImport == other.bIsPackageImport;
+}
 
 /** Represents an object reference inside of the package, can be either an import or index into the export map */
 struct FPackageLocalObjectRef
@@ -65,13 +70,21 @@ struct FPackageLocalObjectRef
 	bool bIsImport{false};
 	/** True if this is Null, which means this is a top level export */
 	bool bIsNull{false};
+	bool operator==(const FPackageLocalObjectRef& other) const;
 };
+
+inline bool FPackageLocalObjectRef::operator==(const FPackageLocalObjectRef& other) const
+{
+	return Import == other.Import && ExportIndex == other.ExportIndex && bIsExportReference == other.bIsExportReference
+		&& bIsImport == other.bIsImport && bIsNull == other.bIsNull;
+}
 
 /** Export entry describes a single exported object inside of the export bundle */
 struct FPackageMapExportEntry
 {
 	/** Name of the exported object */
 	FName ObjectName;
+	FName FullName;
 	/** Indices of the various objects related to this export */
 	FPackageLocalObjectRef OuterIndex;
 	FPackageLocalObjectRef ClassIndex;
@@ -88,19 +101,31 @@ struct FPackageMapExportEntry
 	int32 SerialDataSize{0};
 };
 
-/** Describes an internal dependency between two export bundles */
-struct FPackageMapInternalDependencyArc
+struct FArc
 {
-	int32 FromExportBundleIndex{0};
-	int32 ToExportBundleIndex{0};
+	uint32 FromNodeIndex;
+	uint32 ToNodeIndex;
+
+	bool operator==(const FArc& Other) const
+	{
+		return ToNodeIndex == Other.ToNodeIndex && FromNodeIndex == Other.FromNodeIndex;
+	}
+	
+	friend FArchive& operator<<(FArchive& Ar, FArc& A)
+	{
+		Ar << A.FromNodeIndex;
+		Ar << A.ToNodeIndex;
+
+		return Ar;
+	}
 };
 
 /** Describes a dependency on the external package's export bundle */
 struct FPackageMapExternalDependencyArc
 {
-	int32 FromImportIndex{0};
-	FExportBundleEntry::EExportCommandType FromCommandType{FExportBundleEntry::ExportCommandType_Count};
-	int32 ToExportBundleIndex{0};
+	FPackageId ImportedPackageId{};
+	int32 ExternalArcCount;
+	TArray<FArc> Arcs;
 };
 
 /**
@@ -123,8 +148,6 @@ struct FPackageMapExportBundleEntry
 	TArray<FPackageMapExportEntry> ExportMap;
 	/** Export bundles for this package */
 	TArray<TArray<FExportBundleEntry>> ExportBundles;
-	/** Dependencies between the package bundles inside of this package */
-	TArray<FPackageMapInternalDependencyArc> InternalArcs;
 	/** Dependencies from the package bundles inside of this package to external packages */
 	TArray<FPackageMapExternalDependencyArc> ExternalArcs;
 	/** ID of the chunk in which exports of this package are located */
@@ -132,6 +155,7 @@ struct FPackageMapExportBundleEntry
 	/** ID of the bulk data chunks for this package */
 	TArray<FIoChunkId> BulkDataChunkIds;
 	uint32 CookedHeaderSize = 0;
+	FPackageId PackageId;
 };
 
 /** Package map is a central storage mapping package IDs (and overall any FPackageObjectIndex objects) to their names and locations */
@@ -140,7 +164,8 @@ class ZENTOOLS_API FIoStorePackageMap
 private:
 	TMap<FPackageId, FPackageHeaderData> PackageHeaders;
 	TMap<FPackageObjectIndex, FPackageMapScriptObjectEntry> ScriptObjectMap;
-	TMap<FPackageId, FPackageMapExportBundleEntry> PackageMap;
+	TArray<FPackageMapExportBundleEntry> PackageInfos;
+	TMap<FPackageObjectIndex, int32> ExportIndices;
 	TMap<FIoContainerId, FPackageContainerMetadata> ContainerMetadata;
 public:
 	/** Salvages the provided IoStore container for the exports and script objects and populates the map */
@@ -152,14 +177,19 @@ public:
 	/** Attempts to find the export bundle for the given package */
 	bool FindExportBundleData( const FPackageId& PackageId, FPackageMapExportBundleEntry& OutExportBundleEntry ) const;
 
+	/** Attempts to find the export bundle for the given package */
+	bool FindExportBundleData( const FPackageObjectIndex& Index, FPackageMapExportBundleEntry& OutExportBundleEntry ) const;
+
+	int32 FindExportIndex(const FPackageObjectIndex& Index);
+	
 	bool FindPackageContainerMetadata( FIoContainerId ContainerId, FPackageContainerMetadata& OutMetadata ) const;
 
 	bool FindPackageHeader( const FPackageId& PackageId, FPackageHeaderData& OutPackageHeader ) const;
 
-	FORCEINLINE int32 GetTotalPackageCount() const { return PackageMap.Num(); }
+	FORCEINLINE int32 GetTotalPackageCount() const { return PackageInfos.Num(); }
 private:
 	void ReadScriptObjects( const FIoBuffer& ChunkBuffer, const FIoBuffer& NamesIoBuffer, const FIoBuffer& NamesHashesIoBuffer );
 	FPackageMapExportBundleEntry* ReadExportBundleData( const FPackageId& PackageId, const FIoStoreTocChunkInfo& ChunkInfo, const FIoBuffer& ChunkBuffer );
 	
-	static FPackageLocalObjectRef ResolvePackageLocalRef( const FPackageObjectIndex& PackageObjectIndex, const TArrayView<const FPackageId>& ImportedPackages, const TArrayView<const uint64>& ImportedPublicExportHashes );
+	static FPackageLocalObjectRef ResolvePackageLocalRef( const FPackageObjectIndex& PackageObjectIndex );
 };

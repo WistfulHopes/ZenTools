@@ -34,6 +34,12 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 
 bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPath, const FString& OutputDirPath, const FString& EncryptionKeysFile )
 {
+	// Load optional modules.
+	if (FModuleManager::Get().ModuleExists(TEXT("OodleDataCompressionFormat")))
+	{
+		FModuleManager::Get().LoadModule("OodleDataCompressionFormat");
+	}
+
 	TMap<FGuid, FAES::FAESKey> EncryptionKeys;
 	if ( !EncryptionKeysFile.IsEmpty() )
 	{
