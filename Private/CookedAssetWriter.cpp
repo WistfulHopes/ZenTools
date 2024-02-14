@@ -1,4 +1,4 @@
-﻿// Copyright Nikita Zolotukhin. All Rights Reserved.
+// Copyright Nikita Zolotukhin. All Rights Reserved.
 
 #include "CookedAssetWriter.h"
 #include "IoStorePackageMap.h"

@@ -1,4 +1,4 @@
-﻿// Copyright Nikita Zolotukhin. All Rights Reserved.
+// Copyright Nikita Zolotukhin. All Rights Reserved.
 
 #include "IoStorePackageMap.h"
 
@@ -451,26 +451,24 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	// Read arcs, they are needed to create a list of preload dependencies for this package
 	//const uint64 ExportBundleHeadersSize = sizeof(FExportBundleHeader) * PackageHeader.ExportBundleCount;
 	const uint64 ArcsDataOffset = PackageSummary->GraphDataOffset;
-	const uint64 ArcsDataSize = PackageSummary->CookedHeaderSize - ArcsDataOffset;
+	const uint64 ArcsDataSize = PackageSummary->GraphDataSize;
 
 	FMemoryReaderView ArcsAr(MakeArrayView<const uint8>(PackageSummaryData + ArcsDataOffset, ArcsDataSize));
 
-	for ( int32 ImportPackageIndex = 0; ImportPackageIndex < PackageHeader.ImportedPackages.Num(); ImportPackageIndex++ )
-	{
-		int32 ExternalArcsCount = 0;
-		ArcsAr << ExternalArcsCount;
+	int32 ImportedPackagesCount;
+	ArcsAr << ImportedPackagesCount;
 
-		for ( int32 Idx = 0; Idx < ExternalArcsCount; Idx++ )
+	for ( int32 ImportPackageIndex = 0; ImportPackageIndex < ImportedPackagesCount; ImportPackageIndex++ )
+	{
+		FPackageMapExternalDependencyArc& ExternalArc = PackageData.ExternalArcs.AddDefaulted_GetRef();
+		ArcsAr << ExternalArc.ImportedPackageId;
+		ArcsAr << ExternalArc.ExternalArcCount;
+
+		for ( int32 Idx = 0; Idx < ExternalArc.ExternalArcCount; Idx++ )
 		{
-			FPackageMapExternalDependencyArc& ExternalArc = PackageData.ExternalArcs.AddDefaulted_GetRef();
-			ArcsAr << ExternalArc.ImportedPackageId;
-			ArcsAr << ExternalArc.ExternalArcCount;
-			for (int32 Idx2 = 0; Idx2 < ExternalArc.ExternalArcCount; Idx2++)
-			{
-				FArc NewArc;
-				ArcsAr << NewArc;
-				ExternalArc.Arcs.Add(NewArc);
-			}
+			FArc NewArc;
+			ArcsAr << NewArc;
+			ExternalArc.Arcs.Add(NewArc);
 		}
 	}
 	return &PackageData;
