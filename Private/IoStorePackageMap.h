@@ -99,6 +99,8 @@ struct FPackageMapExportEntry
 	int32 SerialDataOffset{0};
 	/** Size of the serialized cooked data */
 	int32 SerialDataSize{0};
+	/** Serialized cooked data blob for this export */
+	TSharedPtr<TArray<uint8>> CookedSerialData;
 };
 
 struct FArc
@@ -187,9 +189,9 @@ public:
 	bool FindPackageHeader( const FPackageId& PackageId, FPackageHeaderData& OutPackageHeader ) const;
 
 	FORCEINLINE int32 GetTotalPackageCount() const { return PackageInfos.Num(); }
+
+	static FPackageLocalObjectRef ResolvePackageLocalRef(const FPackageObjectIndex& PackageObjectIndex);
 private:
 	void ReadScriptObjects( const FIoBuffer& ChunkBuffer, const FIoBuffer& NamesIoBuffer, const FIoBuffer& NamesHashesIoBuffer );
 	FPackageMapExportBundleEntry* ReadExportBundleData( const FPackageId& PackageId, const FIoStoreTocChunkInfo& ChunkInfo, const FIoBuffer& ChunkBuffer );
-	
-	static FPackageLocalObjectRef ResolvePackageLocalRef( const FPackageObjectIndex& PackageObjectIndex );
 };

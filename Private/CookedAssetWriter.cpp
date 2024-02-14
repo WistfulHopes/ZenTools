@@ -288,9 +288,8 @@ FPackageIndex FCookedAssetWriter::CreateScriptObjectImport(const FPackageObjectI
 		// We know nothing about the object otherwise, can be a top level object, can be a default sub-object of some native object
 		else
 		{
-			const FSoftObjectPath ClassPath = UObject::StaticClass()->GetPathName();
-			NewObjectImport.ClassName = *ClassPath.GetAssetName();
-			NewObjectImport.ClassPackage = *ClassPath.GetLongPackageName();
+			NewObjectImport.ClassName = "Class";
+			NewObjectImport.ClassPackage = "/Script/CoreUObject";
 		}
 	
 		NewObjectImport.OuterIndex = OuterObjectIndex;
@@ -304,14 +303,23 @@ FPackageIndex FCookedAssetWriter::CreateScriptObjectImport(const FPackageObjectI
 FPackageIndex FCookedAssetWriter::CreateExternalPackageObjectReference(const FPackageObjectIndex& PackageExportIndex, FAssetSerializationContext& Context) const
 {
 	FPackageMapExportBundleEntry ImportedPackageBundle;
-	check( PackageMap->FindExportBundleData( PackageExportIndex, ImportedPackageBundle ) );
+	check(PackageMap->FindExportBundleData(PackageExportIndex, ImportedPackageBundle));
 
+	int32 ExportIndex = INDEX_NONE;
 	// Find the index of the export with the specified hash
-	const int32 ExportIndex = PackageMap->FindExportIndex(PackageExportIndex);
-	check( ExportIndex != INDEX_NONE );
+	for (int32 i = 0; i < ImportedPackageBundle.ExportMap.Num(); i++)
+	{
+		if (ImportedPackageBundle.ExportMap[i].GlobalImportIndex == FIoStorePackageMap::ResolvePackageLocalRef(PackageExportIndex))
+		{
+			ExportIndex = i;
+			break;
+		}
+	}
+
+	check(ExportIndex != INDEX_NONE);
 
 	// Call the internal function that will recursively populate exports
-	return CreatePackageExportReference( &ImportedPackageBundle, ExportIndex, Context );
+	return CreatePackageExportReference(&ImportedPackageBundle, ExportIndex, Context);
 }
 
 FPackageIndex FCookedAssetWriter::CreateExternalPackageReference(const FPackageId& PackageId, FAssetSerializationContext& Context) const
@@ -449,7 +457,7 @@ FSoftObjectPath FCookedAssetWriter::ResolvePackagePath( FPackageIndex PackageInd
 	}
 
 	// Finally construct the soft object path
-	return FSoftObjectPath( FName( PackageName.ToString() + TopLevelAssetName.ToString() ), SubObjectPathBuilder.ToString() );
+	return FSoftObjectPath( FName( PackageName.ToString() + '.' + TopLevelAssetName.ToString()), SubObjectPathBuilder.ToString());
 }
 
 void FExportPreloadDependencyList::AddDependency( uint32 CurrentCommand, FPackageIndex FromIndex, uint32 FromCommand )
@@ -944,7 +952,7 @@ void FCookedAssetWriter::WriteBulkData( const FAssetSerializationContext& Contex
 		FString RelativeFilename = Context.BundleData->PackageName.ToString();
 		RelativeFilename.RemoveFromStart( TEXT("../../../") );
 
-		const FString ResultFilename = FPaths::Combine( RootOutputDir, RelativeFilename );
+		const FString ResultFilename = FPaths::Combine( RootOutputDir, RelativeFilename + ".ubulk");
 		FFileHelper::SaveArrayToFile( TArrayView<const uint8>( BulkDataBuffer.ValueOrDie().Data(), BulkDataBuffer.ValueOrDie().DataSize() ), *ResultFilename );
 
 		ChunkIdToSavedFileMap.Add( BulkDataChunkId, RelativeFilename );

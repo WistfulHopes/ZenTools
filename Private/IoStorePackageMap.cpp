@@ -68,7 +68,7 @@ void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>&
 		
 		TIoStatusOr<FIoStoreTocChunkInfo> ChunkInfo = Reader->GetChunkInfo( ChunkId );
 		TIoStatusOr<FIoBuffer> PackageBuffer = Reader->Read( ChunkId, FIoReadOptions() );
-		check( PackageBuffer.IsOk() );
+ 		check( PackageBuffer.IsOk() );
 
 		FPackageMapExportBundleEntry* ExportBundleEntry = ReadExportBundleData( PackageId, ChunkInfo.ValueOrDie(), PackageBuffer.ValueOrDie() );
 
@@ -304,7 +304,7 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	PackageData.NameMap.AddZeroed( PackageFNames.Num() );
 	for ( int32 i = 0; i < PackageFNames.Num(); i++ )
 	{
-		PackageData.NameMap[i] = FName::CreateFromDisplayId(PackageFNames[PackageSummary->Name.GetIndex()], NAME_NO_NUMBER_INTERNAL);
+		PackageData.NameMap[i] = FName::CreateFromDisplayId(PackageFNames[i], NAME_NO_NUMBER_INTERNAL);
 	}
 
 	// Resolve import map now
@@ -358,7 +358,7 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	// Read export bundles
 	const FExportBundleHeader* ExportBundleHeaders = reinterpret_cast<const FExportBundleHeader*>(PackageSummaryData + PackageSummary->ExportBundlesOffset);
 	const FExportBundleEntry* ExportBundleEntries = reinterpret_cast<const FExportBundleEntry*>(ExportBundleHeaders + PackageHeader.ExportBundleCount);
-	uint64 CurrentExportOffset = PackageSummary->CookedHeaderSize;
+	uint64 CurrentExportOffset = PackageSummary->GraphDataOffset + PackageSummary->GraphDataSize;
 	
 	for ( int32 ExportBundleIndex = 0; ExportBundleIndex < PackageHeader.ExportBundleCount; ExportBundleIndex++ )
 	{
@@ -397,7 +397,7 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 				auto& Export = PackageInfo.ExportMap[i];
 				if (!Export.GlobalImportIndex.bIsNull)
 				{
-					this->ExportIndices.Add(ExportMap[i].GlobalImportIndex, i);
+					this->ExportIndices.Add(Export.GlobalImportIndex.Import.GlobalImportIndex, i);
 				}
 			}
 		}
