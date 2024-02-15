@@ -134,6 +134,15 @@ bool FIoStorePackageMap::FindPackageHeader(const FPackageId& PackageId, FPackage
 	return false;
 }
 
+FName FIoStorePackageMap::FindPackageName(const FPackageId& PackageId) const
+{
+	if ( const FPackageMapExportBundleEntry* Entry = PackageMap.Find( PackageId ) )
+	{
+		return Entry->PackageName;
+	}
+	return NAME_None;
+}
+
 bool FIoStorePackageMap::FindScriptObject(const FPackageObjectIndex& Index, FPackageMapScriptObjectEntry& OutMapEntry) const
 {
 	check( Index.IsScriptImport() );
@@ -299,8 +308,9 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	PackageData.PackageFlags = PackageSummary->PackageFlags;
 	// PackageData.VersioningInfo = VersioningInfo;
 	PackageData.PackageChunkId = ChunkInfo.Id;
-	
-	// Save name map
+	PackageMap.FindOrAdd(PackageId, PackageData);
+
+  // Save name map
 	PackageData.NameMap.AddZeroed( PackageFNames.Num() );
 	for ( int32 i = 0; i < PackageFNames.Num(); i++ )
 	{

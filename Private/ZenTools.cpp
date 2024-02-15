@@ -32,7 +32,7 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 	return Result;
 }
 
-bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPath, const FString& OutputDirPath, const FString& EncryptionKeysFile )
+bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPath, const FString& OutputDirPath, const FString& EncryptionKeysFile, const FString& PackageFilter )
 {
 	// Load optional modules.
 	if (FModuleManager::Get().ModuleExists(TEXT("OodleDataCompressionFormat")))
@@ -128,10 +128,10 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 
 	UE_LOG( LogIoStoreTools, Display, TEXT("Begin writing Cooked Packages to '%s'"), *OutputDirPath );
 	const TSharedPtr<FCookedAssetWriter> PackageWriter = MakeShared<FCookedAssetWriter>( PackageMap, OutputDirPath );
-
+	
 	for ( const TSharedPtr<FIoStoreReader>& Reader : ContainerReaders )
 	{
-		PackageWriter->WritePackagesFromContainer( Reader );
+		PackageWriter->WritePackagesFromContainer( Reader, PackageFilter );
 	}
 	
 	UE_LOG( LogIoStoreTools, Display, TEXT("Done writing %d packages."), PackageWriter->GetTotalNumPackagesWritten() );
@@ -159,7 +159,12 @@ bool FIOStoreTools::ExecuteIOStoreTools(const TCHAR* Cmd)
 		}
 
 		FString EncryptionKeysFile;
-		if ( FParse::Value( Cmd, TEXT("-EncryptionKeys="), EncryptionKeysFile ) )
+		if ( FParse::Value( Cmd, TEXT("EncryptionKeys="), EncryptionKeysFile ) )
+		{
+			EncryptionKeysFile = FPaths::ConvertRelativePathToFull( EncryptionKeysFile );
+		}
+		// Legacy argument support, it should not have a forward slash
+		else if ( FParse::Value( Cmd, TEXT("-EncryptionKeys="), EncryptionKeysFile ) )
 		{
 			EncryptionKeysFile = FPaths::ConvertRelativePathToFull( EncryptionKeysFile );
 		}
@@ -169,10 +174,14 @@ bool FIOStoreTools::ExecuteIOStoreTools(const TCHAR* Cmd)
 		
 		UE_LOG( LogIoStoreTools, Display, TEXT("Extracting packages from IoStore containers at '%s' to directory '%s'"), *ContainerFolderPath, *ExtractFolderRootPath );
 
-		return ExtractPackagesFromContainers( ContainerFolderPath, ExtractFolderRootPath, EncryptionKeysFile );
+		// Maybe parse a package filter
+		FString PotentialPackageFilter;
+		FParse::Value( Cmd, TEXT("PackageFilter="), PotentialPackageFilter );
+
+		return ExtractPackagesFromContainers( ContainerFolderPath, ExtractFolderRootPath, EncryptionKeysFile, PotentialPackageFilter );
 	}
 
 	UE_LOG( LogIoStoreTools, Display, TEXT("Unknown command. Available commands: ") );
-	UE_LOG( LogIoStoreTools, Display, TEXT("ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [-EncryptionKeys=<KeyFile>] -- Extract packages from the IoStore containers in the provided folder") );
+	UE_LOG( LogIoStoreTools, Display, TEXT("ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [-EncryptionKeys=<KeyFile>] [-ZenPackageVersion=<Initial/DataResourceTable/Latest>] [-PackageFilter=<Package/Path/Filter>] -- Extract packages from the IoStore containers in the provided folder") );
 	return false;
 }

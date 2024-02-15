@@ -166,10 +166,12 @@ class ZENTOOLS_API FIoStorePackageMap
 private:
 	TMap<FPackageId, FPackageHeaderData> PackageHeaders;
 	TMap<FPackageObjectIndex, FPackageMapScriptObjectEntry> ScriptObjectMap;
+	TMap<FPackageId, FPackageMapExportBundleEntry> PackageMap;
 	TArray<FPackageMapExportBundleEntry> PackageInfos;
 	TMap<FPackageObjectIndex, int32> ExportIndices;
 	TMap<FIoContainerId, FPackageContainerMetadata> ContainerMetadata;
 public:
+
 	/** Salvages the provided IoStore container for the exports and script objects and populates the map */
 	void PopulateFromContainer(const TSharedPtr<FIoStoreReader>& Reader);
 
@@ -188,6 +190,8 @@ public:
 
 	bool FindPackageHeader( const FPackageId& PackageId, FPackageHeaderData& OutPackageHeader ) const;
 
+	FName FindPackageName( const FPackageId& PackageId ) const;
+  
 	FORCEINLINE int32 GetTotalPackageCount() const { return PackageInfos.Num(); }
 
 	static FPackageLocalObjectRef ResolvePackageLocalRef(const FPackageObjectIndex& PackageObjectIndex);
