@@ -12,8 +12,6 @@ DEFINE_LOG_CATEGORY( LogIoStoreTools );
 
 INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 {
-	FTaskTagScope Scope(ETaskTag::EGameThread);
-
 	// start up the main loop
 	GEngineLoop.PreInit(ArgC, ArgV);
 
@@ -36,6 +34,12 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 
 bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPath, const FString& OutputDirPath, const FString& EncryptionKeysFile, EZenPackageVersion DefaultZenPackageVersion, const FString& PackageFilter )
 {
+	// Load optional modules.
+	if (FModuleManager::Get().ModuleExists(TEXT("OodleDataCompressionFormat")))
+	{
+		FModuleManager::Get().LoadModule("OodleDataCompressionFormat");
+	}
+
 	TMap<FGuid, FAES::FAESKey> EncryptionKeys;
 	if ( !EncryptionKeysFile.IsEmpty() )
 	{
@@ -87,7 +91,7 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 	TArray<FString> ContainerTableOfContentsFiles;
 	IFileManager::Get().FindFiles( ContainerTableOfContentsFiles, *ContainerDirPath, TEXT(".utoc") );
 
-	if ( ContainerTableOfContentsFiles.IsEmpty() )
+	if ( ContainerTableOfContentsFiles.Num() == 0 )
 	{
 		UE_LOG( LogIoStoreTools, Display, TEXT("Didn't find any container files in folder '%s'"), *ContainerDirPath );
 		return false;
@@ -98,8 +102,11 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 	{
 		const TSharedPtr<FIoStoreReader> IoStoreReader = MakeShared<FIoStoreReader>();
 		const FString FullFilePath = FPaths::Combine( ContainerDirPath, ContainerFilename );
+
+		FIoStoreEnvironment Environment = FIoStoreEnvironment();
+		Environment.InitializeFileEnvironment(*FPaths::ChangeExtension( FullFilePath, TEXT("") ), 0);
 		
-		const FIoStatus OpenStatus = IoStoreReader->Initialize(  *FPaths::ChangeExtension( FullFilePath, TEXT("") ), EncryptionKeys );
+		const FIoStatus OpenStatus = IoStoreReader->Initialize(  Environment, EncryptionKeys );
 		if ( !OpenStatus.IsOk() )
 		{
 			UE_LOG( LogIoStoreTools, Error, TEXT("Failed to open Container file '%s': %s"), *FullFilePath, *OpenStatus.ToString() );
@@ -140,14 +147,14 @@ bool FIOStoreTools::ExecuteIOStoreTools(const TCHAR* Cmd)
 	if ( FParse::Command( &Cmd, TEXT("ExtractPackages") ) )
 	{
 		FString ContainerFolderPath;
-		if ( !FParse::Token( Cmd, ContainerFolderPath, true ) )
+		if ( !FParse::Token( Cmd, ContainerFolderPath, false ) )
 		{
 			UE_LOG( LogIoStoreTools, Display, TEXT("Usage: ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [--EncryptionKeys=<KeyFile>]") );
 			return false;
 		}
 
 		FString ExtractFolderRootPath;
-		if ( !FParse::Token( Cmd, ExtractFolderRootPath, true ) )
+		if ( !FParse::Token( Cmd, ExtractFolderRootPath, false ) )
 		{
 			UE_LOG( LogIoStoreTools, Display, TEXT("Usage: ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [-EncryptionKeys=<KeyFile>]") );
 			return false;

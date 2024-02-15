@@ -14,8 +14,8 @@ class FIoStoreReader;
 struct FUglyPackageSummaryPackageFlagsAccessWorkaround
 {
 	int32 Tag;
-	FPackageFileVersion FileVersionUE;
-	int32 FileVersionLicenseeUE;
+	int32 FileVersionUE4;
+	int32 FileVersionLicenseeUE4;
 	FCustomVersionContainer CustomVersionContainer;
 	uint32 PackageFlags;
 };
@@ -97,14 +97,14 @@ private:
 	static void ReorderPackageImports( const TArray<int32>& OriginalImportOrder, FAssetSerializationContext& Context );
 	
 	FPackageIndex CreateScriptObjectImport( const FPackageObjectIndex& PackageObjectIndex, FAssetSerializationContext& Context ) const;
-	FPackageIndex CreateExternalPackageObjectReference( const FPublicExportKey& PackageImport, FAssetSerializationContext& Context ) const;
+	FPackageIndex CreateExternalPackageObjectReference( const FPackageObjectIndex& PackageExportIndex, FAssetSerializationContext& Context ) const;
 	FPackageIndex CreateExternalPackageReference( const FPackageId& PackageId, FAssetSerializationContext& Context ) const;
 	FPackageIndex CreatePackageExportReference( const FPackageMapExportBundleEntry* ExternalPackageData, int32 ExportIndex, FAssetSerializationContext& Context ) const;
 	FPackageIndex ResolvePackageLocalRef( const FPackageMapExportBundleEntry* ExternalPackageData, const FPackageLocalObjectRef& ObjectRef, FAssetSerializationContext& Context ) const;
 	static FPackageIndex CreatePackageImport( FName PackageName, FAssetSerializationContext& Context );
 	FPackageIndex CreateObjectExport(const FPackageMapExportEntry& ExportData, FAssetSerializationContext& Context ) const;
-	
-	static int32 FindPackageExportByHash( const FPackageMapExportBundleEntry& PackageBundle, uint64 ExportHash );
+
+	static int32 FindPackageExportByHash( const FPackageMapExportBundleEntry& PackageBundle, const FPackageObjectIndex& PackageExportIndex );
 	static FSoftObjectPath ResolvePackagePath( FPackageIndex PackageIndex, FAssetSerializationContext& Context );
 	static FPackageIndex FindExistingObjectImport( FPackageIndex OuterIndex, FName ObjectName, FAssetSerializationContext& Context );
 
