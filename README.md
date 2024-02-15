@@ -2,7 +2,7 @@
 
 ZenTools extracts cooked packages (.uasset/.uexp) from the IoStore container files (.ucas/.utoc + .pak).
 
-Works on UE4.26-27.
+Works on all versions of UE4 that have IO Store.
 
 ## Usage:
 
