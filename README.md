@@ -6,7 +6,7 @@ Works on UE4.26-27.
 
 ## Usage:
 
-`ZenTools.exe ExtractPackages <ContainerFolderPath> <ExtractionDir> [-EncryptionKeys=<KeyFile>]`
+`"ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [-EncryptionKeys=<KeyFile>] [-PackageFilter=<Package/Path/Filter>]`
 
 If your game has encrypted paks, you must provide a keys.json, in the following format:
 
@@ -21,7 +21,7 @@ Obviously if your game only has one encryption key, you only need to specify one
 
 **Example:**
 
-`ZenTools.exe ExtractPackages "D:\SteamLibrary\steamapps\ccommon\somegame\projectname\Content\Paks" "D:\somegame\Output" -EncryptionKeys="D:\somegame\keys.json"`
+`ZenTools.exe ExtractPackages "D:\SteamLibrary\steamapps\ccommon\somegame\projectname\Content\Paks" "D:\somegame\Output" -EncryptionKeys="D:\somegame\keys.json" -PackageFilter=/Game/Path/`
 
 Since the game in the above example needs an AES key, this is the following `keys.json` file:
 
