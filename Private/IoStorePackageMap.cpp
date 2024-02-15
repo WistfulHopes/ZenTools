@@ -8,11 +8,6 @@
 #include "Misc/KeyChainUtilities.h"
 #include "UObject/NameBatchSerialization.h"
 
-void FIoStorePackageMap::SetDefaultZenPackageVersion(EZenPackageVersion NewDefaultPackageVersion)
-{
-	DefaultZenPackageVersion = NewDefaultPackageVersion;
-}
-
 void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>& Reader)
 {
 	bool bReadScriptObjects = true;
@@ -313,6 +308,7 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	PackageData.PackageFlags = PackageSummary->PackageFlags;
 	// PackageData.VersioningInfo = VersioningInfo;
 	PackageData.PackageChunkId = ChunkInfo.Id;
+	PackageMap.FindOrAdd(PackageId, PackageData);
 
   // Save name map
 	PackageData.NameMap.AddZeroed( PackageFNames.Num() );

@@ -32,7 +32,7 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 	return Result;
 }
 
-bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPath, const FString& OutputDirPath, const FString& EncryptionKeysFile, EZenPackageVersion DefaultZenPackageVersion, const FString& PackageFilter )
+bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPath, const FString& OutputDirPath, const FString& EncryptionKeysFile, const FString& PackageFilter )
 {
 	// Load optional modules.
 	if (FModuleManager::Get().ModuleExists(TEXT("OodleDataCompressionFormat")))
@@ -119,7 +119,6 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 
 	UE_LOG( LogIoStoreTools, Display, TEXT("Building Package Map from Containers") );
 	const TSharedPtr<FIoStorePackageMap> PackageMap = MakeShared<FIoStorePackageMap>();
-	PackageMap->SetDefaultZenPackageVersion( DefaultZenPackageVersion );
 
 	for ( const TSharedPtr<FIoStoreReader>& Reader : ContainerReaders )
 	{
@@ -133,7 +132,6 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 	for ( const TSharedPtr<FIoStoreReader>& Reader : ContainerReaders )
 	{
 		PackageWriter->WritePackagesFromContainer( Reader, PackageFilter );
-		PackageWriter->WriteGlobalScriptObjects( Reader );
 	}
 	
 	UE_LOG( LogIoStoreTools, Display, TEXT("Done writing %d packages."), PackageWriter->GetTotalNumPackagesWritten() );
@@ -176,41 +174,11 @@ bool FIOStoreTools::ExecuteIOStoreTools(const TCHAR* Cmd)
 		
 		UE_LOG( LogIoStoreTools, Display, TEXT("Extracting packages from IoStore containers at '%s' to directory '%s'"), *ContainerFolderPath, *ExtractFolderRootPath );
 
-		EZenPackageVersion DefaultZenPackageVersion = EZenPackageVersion::Latest;
-
-		// New zen package version format
-		FString ZenPackageVersionString;
-		if ( FParse::Value( Cmd, TEXT("ZenPackageVersion="), ZenPackageVersionString ) )
-		{
-			if ( ZenPackageVersionString == TEXT("Initial") )
-			{
-				DefaultZenPackageVersion = EZenPackageVersion::Initial;
-			}
-			else if ( ZenPackageVersionString == TEXT("DataResourceTable") )
-			{
-				DefaultZenPackageVersion = EZenPackageVersion::DataResourceTable;
-			}
-			else if ( ZenPackageVersionString == TEXT("Latest") )
-			{
-				DefaultZenPackageVersion = EZenPackageVersion::Latest;
-			}
-			else
-			{
-				UE_LOG( LogIoStoreTools, Display, TEXT("Unknown Zen Package Version '%s'. Available versions are: Initial (UE5), DataResourceTable(UE5.2) and Latest"), *ZenPackageVersionString );
-				return false;
-			}
-		}
-		// Legacy argument to force initial zen package version
-		if ( FParse::Param( Cmd, TEXT("NoDataResourceTable") ) )
-		{
-			DefaultZenPackageVersion = EZenPackageVersion::Initial;
-		}
-
 		// Maybe parse a package filter
 		FString PotentialPackageFilter;
 		FParse::Value( Cmd, TEXT("PackageFilter="), PotentialPackageFilter );
 
-		return ExtractPackagesFromContainers( ContainerFolderPath, ExtractFolderRootPath, EncryptionKeysFile, DefaultZenPackageVersion, PotentialPackageFilter );
+		return ExtractPackagesFromContainers( ContainerFolderPath, ExtractFolderRootPath, EncryptionKeysFile, PotentialPackageFilter );
 	}
 
 	UE_LOG( LogIoStoreTools, Display, TEXT("Unknown command. Available commands: ") );

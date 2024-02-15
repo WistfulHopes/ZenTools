@@ -166,12 +166,11 @@ class ZENTOOLS_API FIoStorePackageMap
 private:
 	TMap<FPackageId, FPackageHeaderData> PackageHeaders;
 	TMap<FPackageObjectIndex, FPackageMapScriptObjectEntry> ScriptObjectMap;
+	TMap<FPackageId, FPackageMapExportBundleEntry> PackageMap;
 	TArray<FPackageMapExportBundleEntry> PackageInfos;
 	TMap<FPackageObjectIndex, int32> ExportIndices;
 	TMap<FIoContainerId, FPackageContainerMetadata> ContainerMetadata;
-	EZenPackageVersion DefaultZenPackageVersion{EZenPackageVersion::Latest};
 public:
-	void SetDefaultZenPackageVersion( EZenPackageVersion NewDefaultPackageVersion );
 
 	/** Salvages the provided IoStore container for the exports and script objects and populates the map */
 	void PopulateFromContainer(const TSharedPtr<FIoStoreReader>& Reader);

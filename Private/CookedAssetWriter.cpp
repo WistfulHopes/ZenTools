@@ -119,7 +119,7 @@ TFunction<bool(const FPackageId&)> FCookedAssetWriter::MakePackageFilterFunction
 		TStringBuilder<256> PackageNameBuffer;
 		PackageName.ToString( PackageNameBuffer );
 
-		return PackageNameBuffer.ToView().StartsWith( PackageFilter );
+		return TStringView<TCHAR>(PackageNameBuffer).StartsWith( PackageFilter );
 	};
 }
 
