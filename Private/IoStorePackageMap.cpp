@@ -165,7 +165,7 @@ bool FIoStorePackageMap::FindExportBundleData(const FPackageObjectIndex& Index,
 	{
 		for (const auto& Export : PackageInfo.ExportMap)
 		{
-			if (ResolvePackageLocalRef(Index) == Export.GlobalImportIndex)
+			if (Index == Export.GlobalImportIndex.Import.GlobalImportIndex)
 			{
 				OutExportBundleEntry = PackageInfo;
 				return true;

@@ -302,24 +302,40 @@ FPackageIndex FCookedAssetWriter::CreateScriptObjectImport(const FPackageObjectI
 
 FPackageIndex FCookedAssetWriter::CreateExternalPackageObjectReference(const FPackageObjectIndex& PackageExportIndex, FAssetSerializationContext& Context) const
 {
-	FPackageMapExportBundleEntry ImportedPackageBundle;
-	check(PackageMap->FindExportBundleData(PackageExportIndex, ImportedPackageBundle));
-
 	int32 ExportIndex = INDEX_NONE;
-	// Find the index of the export with the specified hash
-	for (int32 i = 0; i < ImportedPackageBundle.ExportMap.Num(); i++)
+
+	for (int32 i = 0; i < Context.BundleData->ExportMap.Num(); i++)
 	{
-		if (ImportedPackageBundle.ExportMap[i].GlobalImportIndex == FIoStorePackageMap::ResolvePackageLocalRef(PackageExportIndex))
+		if (Context.BundleData->ExportMap[i].GlobalImportIndex == FIoStorePackageMap::ResolvePackageLocalRef(PackageExportIndex))
 		{
 			ExportIndex = i;
 			break;
 		}
 	}
 
-	check(ExportIndex != INDEX_NONE);
+	if (ExportIndex == INDEX_NONE)
+	{
+		FPackageMapExportBundleEntry ImportedPackageBundle;
+		if (!PackageMap->FindExportBundleData(PackageExportIndex, ImportedPackageBundle)) return FPackageIndex();
 
-	// Call the internal function that will recursively populate exports
-	return CreatePackageExportReference(&ImportedPackageBundle, ExportIndex, Context);
+		// Find the index of the export with the specified hash
+		for (int32 i = 0; i < ImportedPackageBundle.ExportMap.Num(); i++)
+		{
+			if (ImportedPackageBundle.ExportMap[i].GlobalImportIndex == FIoStorePackageMap::ResolvePackageLocalRef(PackageExportIndex))
+			{
+				ExportIndex = i;
+				break;
+			}
+		}
+
+		check(ExportIndex != INDEX_NONE);
+
+		// Call the internal function that will recursively populate exports
+		return CreatePackageExportReference(&ImportedPackageBundle, ExportIndex, Context);
+	}
+
+	check(ExportIndex != INDEX_NONE);
+	return FPackageIndex::FromExport(ExportIndex);
 }
 
 FPackageIndex FCookedAssetWriter::CreateExternalPackageReference(const FPackageId& PackageId, FAssetSerializationContext& Context) const
@@ -329,7 +345,7 @@ FPackageIndex FCookedAssetWriter::CreateExternalPackageReference(const FPackageI
 	{
 		// Resolve exported package bundle first
 		FPackageMapExportBundleEntry ImportedPackageBundle;
-		check( PackageMap->FindExportBundleData( PackageId, ImportedPackageBundle ) );
+		if (!PackageMap->FindExportBundleData( PackageId, ImportedPackageBundle)) return FPackageIndex();
 
 		return CreatePackageImport( ImportedPackageBundle.PackageName, Context );
 	}
@@ -505,7 +521,7 @@ FExportBundleEntry FCookedAssetWriter::BuildPreloadDependenciesFromExportBundle(
     	{
     		for (const FArc& ExternalArc : ExternalDependency.Arcs )
     		{
-    			if ( ExternalArc.ToNodeIndex == ExportBundleIndex )
+    			if ( ExternalArc.ToNodeIndex == ExportBundleIndex && (int32)ExternalArc.FromNodeIndex >= 0 )
     			{
     				const FPackageIndex ImportIndex = FPackageIndex::FromImport( ExternalArc.FromNodeIndex );
     				FirstPreloadDependency.AddDependency( FirstExportInBundle.CommandType, ImportIndex, FirstExportInBundle.CommandType );
@@ -676,7 +692,9 @@ void FCookedAssetWriter::ProcessPackageSummaryAndNamesAndExportsAndImports( FAss
 	Summary.PackageFlags = Context.BundleData->PackageFlags;
 	reinterpret_cast<FUglyPackageSummaryPackageFlagsAccessWorkaround*>( &Summary )->PackageFlags = Context.BundleData->PackageFlags;
 
-	Summary.SetFileVersions(GPackageFileUE4Version, GPackageFileLicenseeUE4Version);
+	Summary.FolderName = "None";
+
+	Summary.SetFileVersions(GPackageFileUE4Version, GPackageFileLicenseeUE4Version, true);
 
 	// Clone name map into the Context
 	for ( const FName& NameMapName : Context.BundleData->NameMap )
@@ -708,7 +726,7 @@ void FCookedAssetWriter::ProcessPackageSummaryAndNamesAndExportsAndImports( FAss
 		else if ( ImportMapEntry.bIsPackageImport )
 		{
 			const FPackageIndex TopmostImportIndex = CreateExternalPackageObjectReference( ImportMapEntry.GlobalImportIndex, Context );
-			OriginalImportOrder.Add( TopmostImportIndex.ToImport() );
+			if (!TopmostImportIndex.IsNull()) OriginalImportOrder.Add( TopmostImportIndex.ToImport() );
 		}
 		// Otherwise it is a null import
 		// Null imports are the remnants of the top level package imports after they have been pre-processed by Zen,
@@ -717,7 +735,7 @@ void FCookedAssetWriter::ProcessPackageSummaryAndNamesAndExportsAndImports( FAss
 		{
 			const FPackageId ImportedPackageId = PackageHeaderData.ImportedPackages[ CurrentImportedPackageIndex++ ];
 			const FPackageIndex PackageImportIndex = CreateExternalPackageReference( ImportedPackageId, Context );
-			OriginalImportOrder.Add( PackageImportIndex.ToImport() );
+			if (!PackageImportIndex.IsNull()) OriginalImportOrder.Add( PackageImportIndex.ToImport() );
 		}
 	}
 
