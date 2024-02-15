@@ -21,7 +21,7 @@ Obviously if your game only has one encryption key, you only need to specify one
 
 **Example:**
 
-`ZenTools.exe ExtractPackages "D:\\SteamLibrary\\steamapps\\common\\somegame\\projectname\\Content\\Paks" "D:\\somegame\\Output" -EncryptionKeys="D:\\somegame\\keys.json"`
+`ZenTools.exe ExtractPackages "D:\SteamLibrary\steamapps\ccommon\somegame\projectname\Content\Paks" "D:\somegame\Output" -EncryptionKeys="D:\somegame\keys.json"`
 
 Since the game in the above example needs an AES key, this is the following `keys.json` file:
 
