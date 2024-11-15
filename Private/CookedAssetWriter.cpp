@@ -300,7 +300,11 @@ FPackageIndex FCookedAssetWriter::CreatePackageImport( FName PackageName, FAsset
 FPackageIndex FCookedAssetWriter::CreateScriptObjectImport(const FPackageObjectIndex& PackageObjectIndex, FAssetSerializationContext& Context) const
 {
 	FPackageMapScriptObjectEntry ScriptObjectEntry;
-	check( PackageMap->FindScriptObject( PackageObjectIndex, ScriptObjectEntry ) );
+	if (!PackageMap->FindScriptObject(PackageObjectIndex, ScriptObjectEntry))
+	{
+		const int32 ImportIndex = Context.ImportMap.AddDefaulted();
+		return FPackageIndex::FromImport(ImportIndex);
+	}
 		
 	// If the outer index is null, we are making a top level UPackage import
 	if ( ScriptObjectEntry.OuterIndex.IsNull() )
@@ -315,30 +319,33 @@ FPackageIndex FCookedAssetWriter::CreateScriptObjectImport(const FPackageObjectI
 	// We couldn't find it, need to create one
 	if ( ResultObjectIndex.IsNull() )
 	{
-		const int32 ImportIndex = Context.ImportMap.AddDefaulted();
-		FObjectImport& NewObjectImport = Context.ImportMap[ ImportIndex ];
-
 		// Guessing the ScriptObject Class is a bit difficult for non-top-level objects, as they can be UClass, UFunction, UEnum or UScriptStruct
 		// If this is the CDO though, we know that it's Class is the ScriptObject specified in the CDO index
 		if ( !ScriptObjectEntry.CDOClassIndex.IsNull() )
 		{
 			const FPackageIndex CDOClassPackageIndex = CreateScriptObjectImport( ScriptObjectEntry.CDOClassIndex, Context );
-
+			const int32 ImportIndex = Context.ImportMap.AddDefaulted();
+			FObjectImport& NewObjectImport = Context.ImportMap[ ImportIndex ];
 			const FSoftObjectPath ClassPath = ResolvePackagePath( CDOClassPackageIndex, Context ).GetAssetPathString();
 			NewObjectImport.ClassName = *ClassPath.GetAssetName();
 			NewObjectImport.ClassPackage = *ClassPath.GetLongPackageName();
+			NewObjectImport.OuterIndex = OuterObjectIndex;
+			NewObjectImport.ObjectName = ScriptObjectEntry.ObjectName;
+
+			ResultObjectIndex = FPackageIndex::FromImport(ImportIndex);
 		}
 		// We know nothing about the object otherwise, can be a top level object, can be a default sub-object of some native object
 		else
 		{
+			const int32 ImportIndex = Context.ImportMap.AddDefaulted();
+			FObjectImport& NewObjectImport = Context.ImportMap[ImportIndex];
 			NewObjectImport.ClassName = "Class";
 			NewObjectImport.ClassPackage = "/Script/CoreUObject";
+			NewObjectImport.OuterIndex = OuterObjectIndex;
+			NewObjectImport.ObjectName = ScriptObjectEntry.ObjectName;
+		
+			ResultObjectIndex = FPackageIndex::FromImport( ImportIndex );
 		}
-	
-		NewObjectImport.OuterIndex = OuterObjectIndex;
-		NewObjectImport.ObjectName = ScriptObjectEntry.ObjectName;
-	
-		ResultObjectIndex = FPackageIndex::FromImport( ImportIndex );
 	}
 	return ResultObjectIndex;
 }
@@ -359,7 +366,11 @@ FPackageIndex FCookedAssetWriter::CreateExternalPackageObjectReference(const FPa
 	if (ExportIndex == INDEX_NONE)
 	{
 		FPackageMapExportBundleEntry ImportedPackageBundle;
-		if (!PackageMap->FindExportBundleData(PackageExportIndex, ImportedPackageBundle)) return FPackageIndex();
+		if (!PackageMap->FindExportBundleData(PackageExportIndex, ImportedPackageBundle))
+		{
+			const int32 ImportIndex = Context.ImportMap.AddDefaulted();
+			return FPackageIndex::FromImport(ImportIndex);
+		}
 
 		// Find the index of the export with the specified hash
 		for (int32 i = 0; i < ImportedPackageBundle.ExportMap.Num(); i++)
@@ -388,7 +399,11 @@ FPackageIndex FCookedAssetWriter::CreateExternalPackageReference(const FPackageI
 	{
 		// Resolve exported package bundle first
 		FPackageMapExportBundleEntry ImportedPackageBundle;
-		if (!PackageMap->FindExportBundleData( PackageId, ImportedPackageBundle)) return FPackageIndex();
+		if (!PackageMap->FindExportBundleData( PackageId, ImportedPackageBundle))
+		{
+			const int32 ImportIndex = Context.ImportMap.AddDefaulted();
+			return FPackageIndex::FromImport(ImportIndex);
+		}
 
 		return CreatePackageImport( ImportedPackageBundle.PackageName, Context );
 	}
@@ -449,13 +464,13 @@ FPackageIndex FCookedAssetWriter::CreatePackageExportReference( const FPackageMa
 		// Need to create it if it does not already exist
 		if ( ResultIndex.IsNull() )
 		{
-			const int32 ImportIndex = Context.ImportMap.AddDefaulted();
-			FObjectImport& NewObjectImport = Context.ImportMap[ ImportIndex ];
-
 			// The class name might be one of our exports in case of circular dependencies (which is the point),
 			// so we need to postpone class name fixup for this import until we have written our exports
 			const FPackageIndex ExportClassIndex = ResolvePackageLocalRef( ExternalPackageData, ExportData.ClassIndex, Context );
 		
+			const int32 ImportIndex = Context.ImportMap.AddDefaulted();
+			FObjectImport& NewObjectImport = Context.ImportMap[ ImportIndex ];
+
 			Context.ImportClassPathFixup.Add( ImportIndex, ExportClassIndex );
 			NewObjectImport.OuterIndex = OuterIndex;
 			NewObjectImport.ObjectName = ExportData.ObjectName;
@@ -557,31 +572,31 @@ FExportBundleEntry FCookedAssetWriter::BuildPreloadDependenciesFromExportBundle(
 	{
 		Context.ProcessedExportBundles.Add( ExportBundleIndex );
 		const FExportBundleEntry& FirstExportInBundle = ExportBundle[ 0 ];
-    	FExportPreloadDependencyList& FirstPreloadDependency = Context.PreloadDependencies[ FirstExportInBundle.LocalExportIndex ];
-    
-    	// Add external dependencies to the first export in the bundle
-    	for ( const FPackageMapExternalDependencyArc& ExternalDependency : Context.BundleData->ExternalArcs )
-    	{
-    		for (const FArc& ExternalArc : ExternalDependency.Arcs )
-    		{
-    			if ( ExternalArc.ToNodeIndex == ExportBundleIndex && (int32)ExternalArc.FromNodeIndex >= 0 )
-    			{
-    				const FPackageIndex ImportIndex = FPackageIndex::FromImport( ExternalArc.FromNodeIndex );
-    				FirstPreloadDependency.AddDependency( FirstExportInBundle.CommandType, ImportIndex, FirstExportInBundle.CommandType );
-    			}
-    		}
-    	}
-    
-    	// Go over the exports in the bundle in their order and add dependency on the previous one for each export
-    	for ( int32 i = 1; i < ExportBundle.Num(); i++ )
-    	{
-    		const FExportBundleEntry& PreviousExportInBundle = ExportBundle[ i - 1 ];
-    		const FExportBundleEntry& CurrentExport = ExportBundle[ i ];
-    
-    		const FPackageIndex& ExportIndex = FPackageIndex::FromExport( PreviousExportInBundle.LocalExportIndex );
-    		FExportPreloadDependencyList& CurrentPreloadDependency = Context.PreloadDependencies[ CurrentExport.LocalExportIndex ];
-    		CurrentPreloadDependency.AddDependency( CurrentExport.CommandType, ExportIndex, PreviousExportInBundle.CommandType );
-    	}
+		FExportPreloadDependencyList& FirstPreloadDependency = Context.PreloadDependencies[ FirstExportInBundle.LocalExportIndex ];
+	
+		// Add external dependencies to the first export in the bundle
+		for ( const FPackageMapExternalDependencyArc& ExternalDependency : Context.BundleData->ExternalArcs )
+		{
+			for (const FArc& ExternalArc : ExternalDependency.Arcs )
+			{
+				if ( ExternalArc.ToNodeIndex == ExportBundleIndex && (int32)ExternalArc.FromNodeIndex >= 0 )
+				{
+					const FPackageIndex ImportIndex = FPackageIndex::FromImport( ExternalArc.FromNodeIndex );
+					FirstPreloadDependency.AddDependency( FirstExportInBundle.CommandType, ImportIndex, FirstExportInBundle.CommandType );
+				}
+			}
+		}
+	
+		// Go over the exports in the bundle in their order and add dependency on the previous one for each export
+		for ( int32 i = 1; i < ExportBundle.Num(); i++ )
+		{
+			const FExportBundleEntry& PreviousExportInBundle = ExportBundle[ i - 1 ];
+			const FExportBundleEntry& CurrentExport = ExportBundle[ i ];
+	
+			const FPackageIndex& ExportIndex = FPackageIndex::FromExport( PreviousExportInBundle.LocalExportIndex );
+			FExportPreloadDependencyList& CurrentPreloadDependency = Context.PreloadDependencies[ CurrentExport.LocalExportIndex ];
+			CurrentPreloadDependency.AddDependency( CurrentExport.CommandType, ExportIndex, PreviousExportInBundle.CommandType );
+		}
 	}
 
 	// Return the last export in the export bundle on which the dependent bundles can depend

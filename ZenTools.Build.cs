@@ -7,6 +7,8 @@ public class ZenTools : ModuleRules
 	public ZenTools(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PublicIncludePaths.Add("Runtime/Launch/Public");
+		
+		PublicDependencyModuleNames.Add("RSA");
 
 		PrivateDependencyModuleNames.AddRange(new string[] { 
 			"Core", 
